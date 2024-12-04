@@ -1,0 +1,45 @@
+Dec 2024: catch station beamformed packets using tcpdump and examine for SPEAD capture standalone code...
+
+in file test8ch2, there is some mystery stuff at the start of the file, but this includes 10 130 255 104
+which is the IP address of the network that captured the data, so presumably this is extra stuff that
+TCPdump includes that wouldn't normally be in a packet, or is a one-off at the start of the output.
+
+then the SPEAD magic number at 0o122 = 82 bytes in then the next magic number at 0o20304 = 8388,
+so the length of the dump is 8306.
+
+Based on the size of the SPEAD header (7*8 = 56 bytes), and the payload = 8192, we expect the full packet to be
+8248 bytes. So there's an extra 58 bytes....
+
+Next one at 0o40466 = 16694, so number of bytes between second and third packets is 8306
+
+Examining dumps below, there's 24 mystery bytes right at the start, then a block of 58 bytes before
+the magic number at the start of each packet
+
+0000000   -44 -61 -78 -95   2   0   4   0   0   0   0   0   0   0   0   0
+0000020     0   0   4   0   1   0   0   0-118 -83  78 103 -78 -31   8   0
+0000040    98  32   0   0  98  32   0   0 102 -58 -73  14 -41  34 -96 -68
+0000060   111  27 117 -65   8   0  69   0  32  84  13 -88   0   0 118  17
+0000100     2 102  10-126   0  31  10-126  -1 104 -16 -48  18  52  32  64
+0000120     0   0  83   4   2   6   0   0   0   6-128   1   0  82 -53  66
+0000140   -35-113-128   4   0   0   0   0  32   0 -80  16   0   0   0   0
+0000160     0   0 -80   0   0   0   0   1   0  64 -80   1   1   1   1  89
+0000200     0   0  51   0   0   0   0   0   0   0  -2  -2  -4   2   1   5
+
+0020200     0   3   0   1   1   4   0  -1   1  -3-118 -83  78 103 -78 -31
+0020220     8   0  98  32   0   0  98  32   0   0 102 -58 -73  14 -41  34
+0020240   -96 -68 111  27 117 -65   8   0  69   0  32  84  13 -87   0   0
+0020260   118  17   2 101  10-126   0  31  10-126  -1 104 -16 -48  18  52
+0020300    32  64   0   0  83   4   2   6   0   0   0   6-128   1   0  82
+0020320   -53  66 -35-113-128   4   0   0   0   0  32   0 -80  16   0   0
+0020340     0   0   0   0 -80   0   0   2   0   1   0  66 -80   1   1   1
+0020360     1  89   0   0  51   0   0   0   0   0   0   0   2   2  -2   6
+
+0040360     3   3  -2  -4   2   1  -3  -6   0  -1  -4   3-118 -83  78 103
+0040400   -78 -31   8   0  98  32   0   0  98  32   0   0 102 -58 -73  14
+0040420   -41  34 -96 -68 111  27 117 -65   8   0  69   0  32  84  13 -86
+0040440     0   0 118  17   2 100  10-126   0  31  10-126  -1 104 -16 -48
+0040460    18  52  32  64   0   0  83   4   2   6   0   0   0   6-128   1
+0040500     0  82 -53  66 -35-113-128   4   0   0   0   0  32   0 -80  16
+0040520     0   0   0   0   0   0 -80   0   0   4   0   1   0  68 -80   1
+0040540     1   1   1  89   0   0  51   0   0   0   0   0   0   0   2   1
+
