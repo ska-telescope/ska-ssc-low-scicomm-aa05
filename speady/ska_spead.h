@@ -1,3 +1,7 @@
+/*
+  this defines a C data structure to match the SKA specific SPEAD packet format such that received
+  packet header can be directly copied into this data structure (modulo network data ordering of course)
+*/
 #include <stdint.h>
 
 #define SKA_SPEAD_PAYLOAD_LEN 8192

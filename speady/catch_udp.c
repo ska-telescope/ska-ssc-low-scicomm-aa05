@@ -1,4 +1,24 @@
+/*
+  Standalone simple C code to catch SKA SPEAD UDP packets and optionally reorder
+  and fill in missing data. This code also supports reading data captured with tcpdump, in which case
+  there is extra info in the file compared to what is captured from an actual socket
 
+  This is test/debugging code for SKA-Low commissioning
+
+  The SPEAD packet format is defined in:
+  https://confluence.skatelescope.org/display/SE/SP-3800+CBF+SPEAD+format+according+to+ICD+version
+
+  Each packet contains (among other thigns):
+  - timestamp like thing (packet counter)
+  - coarse channel index
+  - 8192 bytes of complex voltages where each sample is 8 bit signed int real/imag, for both pols
+
+  Hence each packet contains 8192/2/2 = 2048 time samples of data for a single channel, both pols
+  Packets are not sent in logical channel order, but all packets for a given timestamp are sent before
+  packets for the next timestamp.
+
+  Randall Wayth. Dec 2024. randall.wayth@skao.int
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,12 +29,13 @@
 #include <arpa/inet.h>		// this seems to be required for sockaddr_in
 #include <assert.h>
 #include <errno.h>
-#include "ska_spead.h"
+#include "ska_spead.h" 
 
+// define double buffers for receiving
 # define N_RX_BUFS 2
 
 typedef struct {
-  int8_t  *dat;
+  int8_t  *dat;            // allocated at runtime depending on how many channels are caught
   uint64_t pkt_since_full; // this contains the full-sized packet counter, which is 6 bytes in the header
   int	n_added;
 } rx_buf;
@@ -31,7 +52,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"Usage:\n%s [options]\n",argv[0]);
     fprintf(stderr,"\t-p port\t\tPort to listen on. Default: %d\n",(int)port);
     fprintf(stderr,"\t-m mode\t\tMode. Default: %d\n",(int)mode);
-    fprintf(stderr,"\t-n nchan\t\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
+    fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
     fprintf(stderr,"\t-d         \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -166,7 +187,7 @@ int rx_packet_udp() {
         fprintf(fpd,"Received message from IP: %s and port: %d with size %d bytes\n",
            inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),res);
     }
-    return 0;
+    return process_packet(message);
 }
 
 int rx_packet_file() {
