@@ -29,6 +29,7 @@
 #include <arpa/inet.h>		// this seems to be required for sockaddr_in
 #include <assert.h>
 #include <errno.h>
+#include <signal.h>
 #include "ska_spead.h" 
 
 // define double buffers for receiving
@@ -45,7 +46,7 @@ int mode=0;	//0== file input, 1== UDP input
 int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8;
 in_port_t port=54321;
 struct sockaddr_in from_addr;
-rx_buf rx_bufs[N_RX_BUFS];	// double receive buffers
+rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
 volatile int curr_rx_buf=0;
 
 void print_usage(char * const argv[]) {
@@ -53,7 +54,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-p port\t\tPort to listen on. Default: %d\n",(int)port);
     fprintf(stderr,"\t-m mode\t\tMode. Default: %d\n",(int)mode);
     fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
-    fprintf(stderr,"\t-d         \twrite debug and runtime info to stderr\n");
+    fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
 
@@ -92,6 +93,10 @@ void parse_cmdline(int argc, char * const argv[]) {
     }
 }
 
+void sig_handler(int sig) {
+    fprintf(stderr,"Received signal %d\n",sig);
+    done=1;
+}
 
 int open_UDP(int port) {
     int fd;
@@ -127,6 +132,9 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
     out->logical_chan_id = ntohs(out->logical_chan_id);
     out->physical_freq_channel = ntohs(out->physical_freq_channel);
     return 0;
+}
+
+void reorder_buf(void *in, void *out) {
 }
 
 int process_packet(void *pkt) {
@@ -183,7 +191,7 @@ int rx_packet_udp() {
         fprintf(stderr,"Couldn't receive\n");
         return -1;
     }
-    if (debug) {
+    if (debug>1) {
         fprintf(fpd,"Received message from IP: %s and port: %d with size %d bytes\n",
            inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),res);
     }
@@ -226,6 +234,9 @@ int main(int argc, char* argv[]) {
     fpd = stderr;
     fpout = stdout;
     fpin = stdin;
+
+    signal(SIGINT,&sig_handler);
+    signal(SIGHUP,&sig_handler);
 
     fprintf(fpd,"size of SPEAD header: %ld\n",sizeof(ska_spead_t));
 
