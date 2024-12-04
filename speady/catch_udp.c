@@ -134,7 +134,21 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
     return 0;
 }
 
+/* the order of the data from the packets into the rx buffer is [freq][time][pol]
+   where there are effectively two time dimensions, because each buffer is a new time.
+   We need to reorder the data to be [time][freq][pol].
+   Since the data are 2-byte complex samples, and the pol is the innermost dimension in both,
+   we can move data in 4-byte chunks
+*/
 void reorder_buf(void *in, void *out) {
+    uint32_t *inp,*outp;
+    inp = (uint32_t *)in;	// cast to fake arrays with 4-byte item sizes
+    outp= (uint32_t *)out;
+    for (int t=0; t<SKA_SPEAD_PAYLOAD_LEN/4; t++) {
+        for(int c=0; c<n_chan; c++) {
+            outp[t*n_chan + c] = inp[c*(SKA_SPEAD_PAYLOAD_LEN/4) + t];
+        }
+    }
 }
 
 int process_packet(void *pkt) {
@@ -164,6 +178,7 @@ int process_packet(void *pkt) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
         // new timestamp, so move to the next buffer
+        reorder_buf(rx_bufs+curr_rx_buf, &out_buf);
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
         if (debug) {
             fprintf(fpd,"New packet timestamp: %llu. Moving to buffer %d\n",pkt_since_full,curr_rx_buf);
@@ -238,7 +253,7 @@ int main(int argc, char* argv[]) {
     signal(SIGINT,&sig_handler);
     signal(SIGHUP,&sig_handler);
 
-    fprintf(fpd,"size of SPEAD header: %ld\n",sizeof(ska_spead_t));
+    if (debug) fprintf(fpd,"size of SPEAD header: %ld\n",sizeof(ska_spead_t));
 
     parse_cmdline(argc,argv);
 
