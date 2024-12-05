@@ -42,9 +42,9 @@ typedef struct {
 } rx_buf;
 
 FILE *fpin=NULL,*fpd=NULL,*fpout=NULL;
-int mode=0;	//0== file input, 1== UDP input
+int mode=1;	//0== file input, 1== UDP input
 int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8;
-in_port_t port=54321;
+in_port_t port=4660;
 struct sockaddr_in from_addr;
 rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
 volatile int curr_rx_buf=0;
@@ -52,7 +52,7 @@ volatile int curr_rx_buf=0;
 void print_usage(char * const argv[]) {
     fprintf(stderr,"Usage:\n%s [options]\n",argv[0]);
     fprintf(stderr,"\t-p port\t\tPort to listen on. Default: %d\n",(int)port);
-    fprintf(stderr,"\t-m mode\t\tMode. Default: %d\n",(int)mode);
+    fprintf(stderr,"\t-m mode\t\tMode. 0==stdin input. 1==UDP input. Default: %d\n",(int)mode);
     fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
@@ -74,7 +74,7 @@ void parse_cmdline(int argc, char * const argv[]) {
                 break;
             case 'm':
                 mode = atoi(optarg);
-                if (mode <=0 || mode > 1) {
+                if (mode <0 || mode > 1) {
                     fprintf(stderr,"bad mode: %d\n", mode);
                     print_usage(argv);
                 }
@@ -142,6 +142,7 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
 */
 void reorder_buf(void *in, void *out) {
     uint32_t *inp,*outp;
+    const int n_times=SKA_SPEAD_PAYLOAD_LEN/4/n_chan;
     inp = (uint32_t *)in;	// cast to fake arrays with 4-byte item sizes
     outp= (uint32_t *)out;
     for (int t=0; t<SKA_SPEAD_PAYLOAD_LEN/4; t++) {
@@ -177,8 +178,9 @@ int process_packet(void *pkt) {
         if(rx_bufs[curr_rx_buf].n_added<n_chan) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
+        //reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
+
         // new timestamp, so move to the next buffer
-        reorder_buf(rx_bufs+curr_rx_buf, &out_buf);
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
         if (debug) {
             fprintf(fpd,"New packet timestamp: %llu. Moving to buffer %d\n",pkt_since_full,curr_rx_buf);
@@ -250,21 +252,23 @@ int main(int argc, char* argv[]) {
     fpout = stdout;
     fpin = stdin;
 
-    signal(SIGINT,&sig_handler);
+    parse_cmdline(argc,argv);
+
+    //signal(SIGINT,&sig_handler);
     signal(SIGHUP,&sig_handler);
 
     if (debug) fprintf(fpd,"size of SPEAD header: %ld\n",sizeof(ska_spead_t));
 
-    parse_cmdline(argc,argv);
-
+    int rx_buf_size=n_chan*SKA_SPEAD_PAYLOAD_LEN;
     for (int i=0; i< N_RX_BUFS; i++) {
-        int rx_buf_size=n_chan*SKA_SPEAD_PAYLOAD_LEN;
 
         rx_bufs[i].dat = malloc(rx_buf_size);
 	assert(rx_bufs[i].dat != NULL);
 	rx_bufs[i].pkt_since_full = 0;
 	rx_bufs[i].n_added=0;
     }
+    out_buf.dat = malloc(rx_buf_size);
+    assert(out_buf.dat != NULL);
 
     if (mode==1) {
         // open UDP listen socket
