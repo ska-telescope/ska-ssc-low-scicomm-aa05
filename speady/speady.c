@@ -54,6 +54,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-p port\t\tPort to listen on. Default: %d\n",(int)port);
     fprintf(stderr,"\t-m mode\t\tMode. 0==stdin input. 1==UDP input. Default: %d\n",(int)mode);
     fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
+    fprintf(stderr,"\t\t\tIf nchan < number of channels in the data, then upper channels in data are discarded\n");
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -61,7 +62,7 @@ void print_usage(char * const argv[]) {
 
 void parse_cmdline(int argc, char * const argv[]) {
     int c;
-    char optstring[]="dp:m:";
+    char optstring[]="dp:m:n:";
 
     while ((c=getopt(argc,argv,optstring)) != -1) {
         switch(c) {
@@ -76,6 +77,13 @@ void parse_cmdline(int argc, char * const argv[]) {
                 mode = atoi(optarg);
                 if (mode <0 || mode > 1) {
                     fprintf(stderr,"bad mode: %d\n", mode);
+                    print_usage(argv);
+                }
+                break;
+            case 'n':
+                n_chan = atoi(optarg);
+                if (n_chan <0 || n_chan > 96) {
+                    fprintf(stderr,"bad n_chan: %d\n", n_chan);
                     print_usage(argv);
                 }
                 break;
@@ -142,7 +150,6 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
 */
 void reorder_buf(void *in, void *out) {
     uint32_t *inp,*outp;
-    const int n_times=SKA_SPEAD_PAYLOAD_LEN/4/n_chan;
     inp = (uint32_t *)in;	// cast to fake arrays with 4-byte item sizes
     outp= (uint32_t *)out;
     for (int t=0; t<SKA_SPEAD_PAYLOAD_LEN/4; t++) {
@@ -162,23 +169,27 @@ int process_packet(void *pkt) {
     if (debug>1) {
         print_spead_header(&spead_header,stderr);
     }
+    // extract full (6-byte) packet counter
     pkt_since_full = ((uint64_t)spead_header.packets_since_pad<<32) + spead_header.packets_since;
     // on startup, wait for the start of a new batch of packets
     if (rx_bufs[curr_rx_buf].pkt_since_full==0 && spead_header.logical_chan_id==0) {
         // set current buffer to be catching packets with this timestamp
         rx_bufs[curr_rx_buf].pkt_since_full = pkt_since_full;
     }
+
     if (pkt_since_full<rx_bufs[curr_rx_buf].pkt_since_full) {
         // a packet is late and has arrived after we've moved to a new buffer... just discard it.
-        fprintf(stderr,"WARNING: late packet with time %llu. Current: %llu\n",pkt_since_full,rx_bufs[curr_rx_buf].pkt_since_full);
+        fprintf(stderr,"WARNING: late packet with time %lu. Current: %lu\n",(unsigned long)pkt_since_full,(unsigned long)rx_bufs[curr_rx_buf].pkt_since_full);
         return 0;
     }
+
     if (pkt_since_full>rx_bufs[curr_rx_buf].pkt_since_full) {
         // check if the buffer was full before moving to next one...
         if(rx_bufs[curr_rx_buf].n_added<n_chan) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
-        //reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
+        reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
+	fwrite(out_buf.dat,n_chan*SKA_SPEAD_PAYLOAD_LEN,1,fpout);
 
         // new timestamp, so move to the next buffer
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
@@ -189,8 +200,11 @@ int process_packet(void *pkt) {
 	rx_bufs[curr_rx_buf].n_added =0;
     }
     // insert packet payload into buffer
-    uint8_t *ptmp = ((uint8_t *)pkt + sizeof(ska_spead_t));
-    memcpy(rx_bufs[curr_rx_buf].dat+spead_header.logical_chan_id*SKA_SPEAD_PAYLOAD_LEN,ptmp,SKA_SPEAD_PAYLOAD_LEN);
+    if (spead_header.logical_chan_id < n_chan) {
+        // dicard packet if we are capturing fewer channels than are in the data
+        uint8_t *ptmp = ((uint8_t *)pkt + sizeof(ska_spead_t));
+        memcpy(rx_bufs[curr_rx_buf].dat+spead_header.logical_chan_id*SKA_SPEAD_PAYLOAD_LEN,ptmp,SKA_SPEAD_PAYLOAD_LEN);
+    }
     rx_bufs[curr_rx_buf].n_added += 1;
 
     return 0;
