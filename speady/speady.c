@@ -43,7 +43,7 @@ typedef struct {
 
 FILE *fpin=NULL,*fpd=NULL,*fpout=NULL;
 int mode=1;	//0== file input, 1== UDP input
-int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8;
+int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0;
 in_port_t port=4660;
 struct sockaddr_in from_addr;
 rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
@@ -55,6 +55,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-m mode\t\tMode. 0==stdin input. 1==UDP input. Default: %d\n",(int)mode);
     fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
     fprintf(stderr,"\t\t\tIf nchan < number of channels in the data, then upper channels in data are discarded\n");
+    fprintf(stderr,"\t-s num  \tStop after capturing num packets. No default.\n");
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -62,7 +63,7 @@ void print_usage(char * const argv[]) {
 
 void parse_cmdline(int argc, char * const argv[]) {
     int c;
-    char optstring[]="dp:m:n:";
+    char optstring[]="dp:m:n:s:";
 
     while ((c=getopt(argc,argv,optstring)) != -1) {
         switch(c) {
@@ -77,6 +78,13 @@ void parse_cmdline(int argc, char * const argv[]) {
                 mode = atoi(optarg);
                 if (mode <0 || mode > 1) {
                     fprintf(stderr,"bad mode: %d\n", mode);
+                    print_usage(argv);
+                }
+                break;
+            case 's':
+                max_packets = atoi(optarg);
+                if (max_packets <0 ) {
+                    fprintf(stderr,"bad max_packets: %d\n", max_packets);
                     print_usage(argv);
                 }
                 break;
@@ -311,6 +319,10 @@ int main(int argc, char* argv[]) {
             fprintf(fpd,"Done after %ld reads\n",(long)n_read);
         }
         n_read += 1;
+	if (max_packets>0 && n_read>max_packets) {
+            fprintf(stderr,"Quitting after reading %d packets\n",max_packets);
+            done=1;
+        }
     }
     return 0;
 }
