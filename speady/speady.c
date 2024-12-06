@@ -130,8 +130,14 @@ void print_spead_header(ska_spead_t *hdr,FILE *fp) {
     fprintf(fp,"Lgchan:\t%d\tphschan:\t%d\n",(int)hdr->logical_chan_id,(int)hdr->physical_freq_channel);
 }
 
+/*
+   unpack the spead header into the data structure. The structure is designed to be a direct map of the received data,
+   but multi-byte items will need to be converted from network order to host order
+   (and more work might be required for the 6-byte items)
+*/
 int decode_spead_header(uint8_t *in, ska_spead_t *out) {
     uint32_t t32;
+
     memcpy(out,in,sizeof(ska_spead_t));
     out->num_items = ntohl(out->num_items);
     out->packets_since_pad = ntohs(out->packets_since_pad);
@@ -139,6 +145,7 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
     out->scan_id = ntohl(out->scan_id);
     out->logical_chan_id = ntohs(out->logical_chan_id);
     out->physical_freq_channel = ntohs(out->physical_freq_channel);
+    // not everything is unpacked yet, but can be done as required...
     return 0;
 }
 
@@ -159,6 +166,10 @@ void reorder_buf(void *in, void *out) {
     }
 }
 
+/*
+  unpack the header and copy the payload of the packet into a receiver buffer
+  a receive buffer will contain all samples for all freq channels for a single timestamp.
+*/
 int process_packet(void *pkt) {
     ska_spead_t spead_header;
     uint64_t pkt_since_full;
@@ -169,23 +180,24 @@ int process_packet(void *pkt) {
     if (debug>1) {
         print_spead_header(&spead_header,stderr);
     }
-    // extract full (6-byte) packet counter
+    // extract full (6-byte) packet counter into a 64-bit int
     pkt_since_full = ((uint64_t)spead_header.packets_since_pad<<32) + spead_header.packets_since;
+
     // on startup, wait for the start of a new batch of packets
     if (rx_bufs[curr_rx_buf].pkt_since_full==0 && spead_header.logical_chan_id==0) {
         // set current buffer to be catching packets with this timestamp
         rx_bufs[curr_rx_buf].pkt_since_full = pkt_since_full;
     }
 
-    if (pkt_since_full<rx_bufs[curr_rx_buf].pkt_since_full) {
+    if (pkt_since_full < rx_bufs[curr_rx_buf].pkt_since_full) {
         // a packet is late and has arrived after we've moved to a new buffer... just discard it.
         fprintf(stderr,"WARNING: late packet with time %lu. Current: %lu\n",(unsigned long)pkt_since_full,(unsigned long)rx_bufs[curr_rx_buf].pkt_since_full);
         return 0;
     }
 
-    if (pkt_since_full>rx_bufs[curr_rx_buf].pkt_since_full) {
+    if (pkt_since_full > rx_bufs[curr_rx_buf].pkt_since_full) {
         // check if the buffer was full before moving to next one...
-        if(rx_bufs[curr_rx_buf].n_added<n_chan) {
+        if(rx_bufs[curr_rx_buf].n_added < n_chan) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
         reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
@@ -194,7 +206,7 @@ int process_packet(void *pkt) {
         // new timestamp, so move to the next buffer
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
         if (debug) {
-            fprintf(fpd,"New packet timestamp: %llu. Moving to buffer %d\n",pkt_since_full,curr_rx_buf);
+            fprintf(fpd,"New packet timestamp: %llu. Moving to buffer %d\n",(unsigned long long) pkt_since_full,(int)curr_rx_buf);
         }
 	rx_bufs[curr_rx_buf].pkt_since_full = pkt_since_full;
 	rx_bufs[curr_rx_buf].n_added =0;
@@ -233,9 +245,9 @@ int rx_packet_file() {
     int res=0,n_to_read;
     char buf[24+58+56+SKA_SPEAD_PAYLOAD_LEN];
 
-    n_to_read=8192+skip_prefix+sizeof(ska_spead_t);
+    n_to_read = SKA_SPEAD_PAYLOAD_LEN+skip_prefix+sizeof(ska_spead_t);
     assert(n_to_read <= sizeof(buf));
-    // discard the first 24 (skip_start) bytes if from file
+    // discard the first 24 (skip_start) bytes if from file created by tcpdump
     if (firstread) {
         fread(buf,skip_start,1,fpin);
         firstread=0;
@@ -302,3 +314,4 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+
