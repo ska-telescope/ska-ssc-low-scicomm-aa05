@@ -34,6 +34,7 @@
 
 // define double buffers for receiving
 # define N_RX_BUFS 2
+#define  N_POL     2
 
 typedef struct {
   int8_t  *dat;            // allocated at runtime depending on how many channels are caught
@@ -43,7 +44,7 @@ typedef struct {
 
 FILE *fpin=NULL,*fpd=NULL,*fpout=NULL;
 int mode=1;	//0== file input, 1== UDP input
-int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0;
+int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0,reorder_mode=1;
 in_port_t port=4660;
 struct sockaddr_in from_addr;
 rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
@@ -56,6 +57,8 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-n nchan\tNum coarse chans to capture. Default: %d\n",(int)n_chan);
     fprintf(stderr,"\t\t\tIf nchan < number of channels in the data, then upper channels in data are discarded\n");
     fprintf(stderr,"\t-s num  \tStop after capturing num packets. No default.\n");
+    fprintf(stderr,"\t-r mode \tReorder mode: 0: no reorder. 1: time,freq,pol. 2: freq,pol,time. Default: %d\n",reorder_mode);
+    fprintf(stderr,"\t\t        Default data order from TPMs is [freq][time][pol]\n");
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -63,7 +66,7 @@ void print_usage(char * const argv[]) {
 
 void parse_cmdline(int argc, char * const argv[]) {
     int c;
-    char optstring[]="dp:m:n:s:";
+    char optstring[]="dp:m:n:s:r:";
 
     while ((c=getopt(argc,argv,optstring)) != -1) {
         switch(c) {
@@ -157,13 +160,14 @@ int decode_spead_header(uint8_t *in, ska_spead_t *out) {
     return 0;
 }
 
+
 /* the order of the data from the packets into the rx buffer is [freq][time][pol]
    where there are effectively two time dimensions, because each buffer is a new time.
    We need to reorder the data to be [time][freq][pol].
    Since the data are 2-byte complex samples, and the pol is the innermost dimension in both,
    we can move data in 4-byte chunks
 */
-void reorder_buf(void *in, void *out) {
+void reorder_buf_time_outermost(void *in, void *out) {
     uint32_t *inp,*outp;
     inp = (uint32_t *)in;	// cast to fake arrays with 4-byte item sizes
     outp= (uint32_t *)out;
@@ -171,6 +175,44 @@ void reorder_buf(void *in, void *out) {
         for(int c=0; c<n_chan; c++) {
             outp[t*n_chan + c] = inp[c*(SKA_SPEAD_PAYLOAD_LEN/4) + t];
         }
+    }
+}
+
+
+/* alternative reordering to match requirement for DSPSR (?) 
+   We need to reorder to [freq][pol][time]
+*/
+void reorder_buf_time_innermost(void *in, void *out) {
+    uint16_t *inp,*outp;
+    inp = (uint16_t *)in;	// cast to fake arrays with 2-byte item sizes
+    outp= (uint16_t *)out;
+    for(int c=0; c<n_chan; c++) {
+        for (int t=0; t<SKA_SPEAD_PAYLOAD_LEN/2; t++) {
+            for(int p=0; p<N_POL; p++) {
+                outp[t + p*N_POL + c*SKA_SPEAD_PAYLOAD_LEN/2] = inp[c*(SKA_SPEAD_PAYLOAD_LEN/2) + t*N_POL + p];
+            }
+        }
+    }
+}
+
+/* reorder and copy to output */
+void reorder_buf(void *in, void *out) {
+
+    switch(reorder_mode) {
+        case 0:
+            // no reorder, just copy
+            memcpy(out,in,SKA_SPEAD_PAYLOAD_LEN*n_chan);
+            break;
+        case 1:
+            reorder_buf_time_outermost(in,out);
+            break;
+        case 2:
+            reorder_buf_time_innermost(in,out);
+            break;
+        default:
+            fprintf(stderr,"Bad reorder mode %d\n",reorder_mode);
+            exit(1);
+            break;
     }
 }
 
