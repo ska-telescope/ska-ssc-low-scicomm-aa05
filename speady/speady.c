@@ -44,7 +44,7 @@ typedef struct {
 
 FILE *fpin=NULL,*fpd=NULL,*fpout=NULL;
 int mode=1;	//0== file input, 1== UDP input
-int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0,reorder_mode=1;
+int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0,reorder_mode=1,pad_output=1;
 in_port_t port=4660;
 struct sockaddr_in from_addr;
 rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
@@ -59,6 +59,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-s num  \tStop after capturing num packets. No default.\n");
     fprintf(stderr,"\t-r mode \tReorder mode: 0: no reorder. 1: time,freq,pol. 2: freq,pol,time. Default: %d\n",reorder_mode);
     fprintf(stderr,"\t\t        Default data order from TPMs is [freq][time][pol]\n");
+    fprintf(stderr,"\t-P      \tPad the output where there are missing time chunks. Default: %d\n",pad_output);
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -246,12 +247,20 @@ int process_packet(void *pkt) {
     }
 
     if (pkt_since_full > rx_bufs[curr_rx_buf].pkt_since_full) {
+	int n_to_write = pkt_since_full - rx_bufs[curr_rx_buf].pkt_since_full;
+
         // check if the buffer was full before moving to next one...
         if(rx_bufs[curr_rx_buf].n_added < n_chan) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
         reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
-	fwrite(out_buf.dat,n_chan*SKA_SPEAD_PAYLOAD_LEN,1,fpout);
+        if (pad_output && n_to_write > 1 && debug) {
+            fprintf(fpd,"Padding %d missing chunks in ouput\n",n_to_write-1);
+        }
+        else {
+            n_to_write=1;
+        }
+	fwrite(out_buf.dat,n_chan*SKA_SPEAD_PAYLOAD_LEN,n_to_write,fpout);
 
         // new timestamp, so move to the next buffer
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
