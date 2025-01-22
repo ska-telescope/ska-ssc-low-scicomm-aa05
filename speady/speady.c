@@ -59,7 +59,7 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-s num  \tStop after capturing num packets. No default.\n");
     fprintf(stderr,"\t-r mode \tReorder mode: 0: no reorder. 1: time,freq,pol. 2: freq,pol,time. Default: %d\n",reorder_mode);
     fprintf(stderr,"\t\t        Default data order from TPMs is [freq][time][pol]\n");
-    fprintf(stderr,"\t-P      \tPad the output where there are missing time chunks. Default: %d\n",pad_output);
+    fprintf(stderr,"\t-P mode \tPad the output where there are missing time chunks. Default: %d\n",pad_output);
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -67,7 +67,7 @@ void print_usage(char * const argv[]) {
 
 void parse_cmdline(int argc, char * const argv[]) {
     int c;
-    char optstring[]="dp:m:n:s:r:";
+    char optstring[]="dP:p:m:n:s:r:";
 
     while ((c=getopt(argc,argv,optstring)) != -1) {
         switch(c) {
@@ -101,6 +101,9 @@ void parse_cmdline(int argc, char * const argv[]) {
                 break;
             case 'd':
                 debug += 1;
+                break;
+            case 'P':
+                pad_output = atoi(optarg);
                 break;
             default:
                 fprintf(stderr,"unknown option %c\n",c);
@@ -254,7 +257,7 @@ int process_packet(void *pkt) {
             fprintf(stderr,"Only read %d packets for timestamp %llu\n",rx_bufs[curr_rx_buf].n_added,rx_bufs[curr_rx_buf].pkt_since_full);
         }
         reorder_buf(rx_bufs[curr_rx_buf].dat, out_buf.dat);
-        if (pad_output && n_to_write > 1 && debug) {
+        if (pad_output && n_to_write > 1) {
             fprintf(fpd,"Padding %d missing chunks in ouput\n",n_to_write-1);
         }
         else {
