@@ -105,6 +105,9 @@ void parse_cmdline(int argc, char * const argv[]) {
             case 'P':
                 pad_output = atoi(optarg);
                 break;
+            case 'r':
+                reorder_mode = atoi(optarg);
+                break;
             default:
                 fprintf(stderr,"unknown option %c\n",c);
                 print_usage(argv);
