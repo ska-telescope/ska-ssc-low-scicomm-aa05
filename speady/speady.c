@@ -35,6 +35,7 @@
 // define double buffers for receiving
 # define N_RX_BUFS 2
 #define  N_POL     2
+#define  MAX_CHAN  384
 
 typedef struct {
   int8_t  *dat;            // allocated at runtime depending on how many channels are caught
@@ -42,13 +43,14 @@ typedef struct {
   int	n_added;
 } rx_buf;
 
-FILE *fpin=NULL,*fpd=NULL,*fpout=NULL;
+FILE *fpin=NULL,*fpd=NULL,*fpout=NULL,*fpout_dada[MAX_CHAN];
 int mode=1;	//0== file input, 1== UDP input
-int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0,reorder_mode=1,pad_output=1;
+int sock_fd=-1, debug=0,skip_start=24,skip_prefix=58,done=0,firstread=1,n_chan=8,max_packets=0,reorder_mode=1,pad_output=1,dada_mode=0;
 in_port_t port=4660;
 struct sockaddr_in from_addr;
 rx_buf rx_bufs[N_RX_BUFS],out_buf;	// double receive buffers
 volatile int curr_rx_buf=0;
+char *dada_file_basename=NULL;
 
 void print_usage(char * const argv[]) {
     fprintf(stderr,"Usage:\n%s [options]\n",argv[0]);
@@ -60,6 +62,9 @@ void print_usage(char * const argv[]) {
     fprintf(stderr,"\t-r mode \tReorder mode: 0: no reorder. 1: time,freq,pol. 2: freq,pol,time. Default: %d\n",reorder_mode);
     fprintf(stderr,"\t\t        Default data order from TPMs is [freq][time][pol]\n");
     fprintf(stderr,"\t-P mode \tPad the output where there are missing time chunks. Default: %d\n",pad_output);
+    fprintf(stderr,"\t-D fnamebase \tOutput separate channels in DADA mode with base filename fnamebase. No default filename.\n");
+    fprintf(stderr,"\t        \tChannels are written with file name suffix XXX.dada, where XXX is channel index\n");
+    fprintf(stderr,"\t        \tThis mode implies reorder mode 0, channels are just separated out into output files.\n");
     fprintf(stderr,"\t-d      \twrite debug and runtime info to stderr\n");
     exit(1);
 }
@@ -67,10 +72,15 @@ void print_usage(char * const argv[]) {
 
 void parse_cmdline(int argc, char * const argv[]) {
     int c;
-    char optstring[]="dP:p:m:n:s:r:";
+    char optstring[]="dP:p:m:n:s:r:D:";
 
     while ((c=getopt(argc,argv,optstring)) != -1) {
         switch(c) {
+            case 'D':
+                dada_file_basename = optarg;
+		reorder_mode=0;
+                dada_mode=1;
+                break;
             case 'p':
                 port = atoi(optarg);
                 if (port <=0 || port > 65535) {
@@ -224,6 +234,23 @@ void reorder_buf(void *in, void *out) {
 }
 
 /*
+*/
+void write_output(int8_t *dat, int n_to_write) {
+    int i,c;
+
+    for (i=0; i< n_to_write; i++) {
+        if (dada_mode) {
+            for(c=0; c<n_chan; c++) {
+                fwrite(out_buf.dat + i*SKA_SPEAD_PAYLOAD_LEN, SKA_SPEAD_PAYLOAD_LEN,1,fpout_dada[c]);
+            }
+        }
+        else {
+            fwrite(out_buf.dat,n_chan*SKA_SPEAD_PAYLOAD_LEN,1,fpout);
+        }
+    }
+}
+
+/*
   unpack the header and copy the payload of the packet into a receiver buffer
   a receive buffer will contain all samples for all freq channels for a single timestamp.
 */
@@ -266,7 +293,7 @@ int process_packet(void *pkt) {
         else {
             n_to_write=1;
         }
-	fwrite(out_buf.dat,n_chan*SKA_SPEAD_PAYLOAD_LEN,n_to_write,fpout);
+        write_output(out_buf.dat, n_to_write);
 
         // new timestamp, so move to the next buffer
 	curr_rx_buf = (curr_rx_buf+1) % N_RX_BUFS;
@@ -335,6 +362,26 @@ int rx_packet(int mode) {
     return res;
 }
 
+/*
+Open output files for DADA style output and write a header block of 4096 bytes.
+This can be edited/updated later without having to re-write the entire file
+*/
+void open_dada_files() {
+    int i;
+    char fname[FILENAME_MAX],header[4100];
+
+    memset(header,0,sizeof(header));
+    sprintf(header,"This is a placeholder 4096 bytes for a DADA header\n");
+    
+    for (i=0; i<n_chan; i++) {
+        snprintf(fname,FILENAME_MAX-1,"%s%03d.dada", dada_file_basename ,i);
+        fpout_dada[i] = fopen(fname,"w");
+        assert(fpout_dada[i] !=NULL);
+        fwrite(header,4096,1,fpout_dada[i]);
+    }
+}
+
+
 int main(int argc, char* argv[]) {
     int res=0;
     uint64_t n_read=0;
@@ -342,6 +389,8 @@ int main(int argc, char* argv[]) {
     fpd = stderr;
     fpout = stdout;
     fpin = stdin;
+
+    for (int i=0; i<MAX_CHAN; i++) fpout_dada[i]=NULL;
 
     parse_cmdline(argc,argv);
 
@@ -360,6 +409,11 @@ int main(int argc, char* argv[]) {
     }
     out_buf.dat = malloc(rx_buf_size);
     assert(out_buf.dat != NULL);
+
+    if(dada_mode) {
+        assert(dada_file_basename!=NULL);
+        open_dada_files();
+    }
 
     if (mode==1) {
         // open UDP listen socket
