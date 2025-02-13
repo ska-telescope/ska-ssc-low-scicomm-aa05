@@ -182,9 +182,9 @@ def main(msname, args):
                     prev_fmhz = fmhz
                 # At this point the operation is the same no matter
                 # where the Jones matrices came from
-                rot_data[i,j,:] = np.matmul(rot_ant1_T,
+                rot_data[i,j,:] = np.matmul(rot_ant1,
                                             np.matmul(unrot_data[i,j,:].reshape((2,2)),
-                                                      rot_ant2)).reshape((4))
+                                                      rot_ant2_T)).reshape((4))
                 # Alternative formulation:
                 #vrecmat = unrot_data[i,j,:].reshape((2,2))
                 #rvrec = rot_ant1_T@vrecmat@rot_ant2
