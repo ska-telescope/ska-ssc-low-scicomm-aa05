@@ -17,7 +17,13 @@ Currently this uses CASA as the main toolkit but we
 may change to DP3 later depending on outcomes.
 """
 
+# In case this import statement causes issues you may wish
+# to add these lines to your ~/.casa/config.py:
+# data_auto_update = False
+# measures_auto_update = False
 from casatasks import gaincal, bandpass, applycal, split
+
+# Other import statements:
 from argparse import ArgumentParser
 from subprocess import call
 from astropy.time import Time
@@ -26,6 +32,7 @@ from astropy.coordinates import AltAz, HADec, EarthLocation, SkyCoord
 import astropy.units as u
 import numpy as np
 from casacore.tables import table
+from vis_rotate import rotate_ms
 
 def main(args):
 
@@ -64,20 +71,22 @@ def main(args):
 
     # Step 3: averaging
     split(vis=args.msname,
-          outputvis='avg.ms',
+          outputvis=args.outmsname,
           width=6,
           timebin='5s',
          )
 
     # Step 4: derotation
     # Mitch provided branch...
-    cmd = f'../vis_rotate.py -c DATA -m eep --eepcorr avg.ms'
-    call(cmd.split())
+    # Changing this to call the function directly
+    #cmd = f'../vis_rotate.py -c DATA -m eep --eepcorr avg.ms'
+    #call(cmd.split())
+    rotate_ms(args.outmsname, column='DATA', mode='eep', eepcorr=True)
 
     # Step 5: Bandpass estimate
     # For this we want to select 10 minutes at the highest elevations
     print('Computing HA, elevation for target track')
-    t = table('avg.ms', ack=False, readonly=True) # Smaller one is faster
+    t = table(args.outmsname, ack=False, readonly=True) # Smaller one is faster
     times = np.unique(t.getcol('TIME'))
     timesobj = Time(times/(24.*3600.), format='mjd')
     target_azel = target.transform_to(AltAz(obstime=timesobj, location=obsloc))
@@ -90,7 +99,7 @@ def main(args):
     bpendtime = timesobj[ttloc]+5.*u.min
     bptimerange = f"{bpstarttime.strftime('%H:%M:%S')[0]}~{bpendtime.strftime('%H:%M:%S')[0]}"
     print(f'Time range for bandpass solution: {bptimerange}')
-    bandpass(vis='avg.ms',
+    bandpass(vis=args.outmsname,
              caltable='bandpass1.tb',
              uvrange='>500m',
              antenna='*&',
@@ -104,7 +113,7 @@ def main(args):
     
     # Step 6: Gain phase estimate
     # This is to make sure the next bandpass estimate is high quality
-    gaincal(vis='avg.ms',
+    gaincal(vis=args.outmsname,
             caltable='gain_bp.tb',
             uvrange='>500m',
             antenna='*&',
@@ -120,7 +129,7 @@ def main(args):
            )
     
     # Step 7: Refine bandpass
-    bandpass(vis='avg.ms',
+    bandpass(vis=args.outmsname,
              caltable='bandpass2.tb',
              uvrange='>500m',
              antenna='*&',
@@ -134,7 +143,7 @@ def main(args):
             )
 
     # Step 8: Time dependent gains
-    gaincal(vis='avg.ms',
+    gaincal(vis=args.outmsname,
             caltable='gain.tb',
             uvrange='>500m',
             antenna='*&',
@@ -149,7 +158,7 @@ def main(args):
            )
     
     # Finally: apply the bandpass and gains
-    applycal(vis='avg.ms',
+    applycal(vis=args.outmsname,
              gaintable=['bandpass2.tb', 'gain.tb'],
             )
 
@@ -158,5 +167,7 @@ def main(args):
 if __name__ == '__main__':
     ap = ArgumentParser()
     ap.add_argument('msname', help='Input MS')
+    ap.add_argument('-o', '--outmsname', help='Output MS name [default %(default)s]',
+                    default='avg.ms')
     args = ap.parse_args()
     main(args)

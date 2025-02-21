@@ -10,6 +10,7 @@ from astropy.time import Time
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 import astropy.units as u
 from glob import glob
+from ska_low_mccs_calibration import eep
 
 """
 Define the station rotation angles for AA0.5
@@ -44,6 +45,7 @@ def rotmat(ang, do_inv):
 """
 Rotation function used if mode = 'analytic'
 Based on Randall's getJonesAnalyticSimple
+Updated 21 Feb 2025 with extra cos(theta) factor
 """
 def rot_analytic(time, loc, radec, ang, do_inv):
     altaz = radec.transform_to(AltAz(obstime=time, location=loc))
@@ -51,10 +53,11 @@ def rot_analytic(time, loc, radec, ang, do_inv):
     azr = altaz.az.rad
     pr = (np.pi/2.) - azr
     ##print(tr,pr,ang)
-    jpp = -np.sin(pr-ang)
-    jpt = np.cos(tr)*np.cos(pr-ang)
-    jqp = np.cos(pr-ang)
-    jqt = np.cos(tr)*np.sin(pr-ang)
+    ct = np.cos(tr)
+    jpp = -np.sin(pr-ang)*ct
+    jpt = np.cos(pr-ang)*ct*ct
+    jqp = np.cos(pr-ang)*ct
+    jqt = np.sin(pr-ang)*ct*ct
     # include 0.5 factor to match scaling of EEPs approximately
     J=np.array([[jpp,jpt],[jqp,jqt]],dtype=np.complex64)
     if do_inv:
@@ -67,6 +70,7 @@ def rot_analytic(time, loc, radec, ang, do_inv):
 Rotation function used if mode = 'eep'
 """
 def rot_eep(time, loc, ra, dec, ang, feep, do_inv, do_pacorr):
+    # We will get a Jones matrix for each time step
     J = eep.station_beam_matrix(feep,
                                 -ang, # -ve seems necessary from testing
                                 loc,
@@ -74,29 +78,41 @@ def rot_eep(time, loc, ra, dec, ang, feep, do_inv, do_pacorr):
                                 ra,
                                 dec,
                                 pa_correction=do_pacorr)
+    # Prepare the arrays to return
+    Jarr = np.zeros_like(J)
+    JarrT = np.zeros_like(J)
     if do_inv: # inv is the other way around for this Jones matrix...
-        return J, J.conj().T
+        for tstep in range(len(J)):
+            Jarr[tstep] = J[tstep]
+            JarrT[tstep] = J[tstep].conj().T
     else:
-        return inv(J), inv(J.conj().T)
+        for tstep in range(len(J)):
+            Jarr[tstep] = inv(J[tstep])
+            JarrT[tstep] = inv(J[tstep].conj().T)
+    return Jarr, JarrT
 
 
-def main(msname, args):
-    # We need the MCCS calibration module if we are in EEP mode
-    # Not importing this at the top because it may not be needed
-    # and it is a non-standard module.
-    if args.mode == 'eep':
-        from ska_low_mccs_calibration import eep
-
+def rotate_ms(msname,
+              column='CORRECTED_DATA',
+              write_to_column='__NONE__',
+              mode='analytic',
+              invert=False,
+              plots=False,
+              dryrun=False,
+              eepdir='/shared/eep-data/Perturbed_Vogel_HARP/Average_EEPs/',
+              eepbase='HARP_SKALA41_randvogel_avg_',
+              eepsuff='.npz',
+              eepcorr=False):
     # First open up the MS
-    if args.dryrun:
+    if dryrun:
         print('DRY RUN ... opening MS readonly')
         t = table(msname, readonly=True)
     else:
         t = table(msname, readonly=False)
 
     # Check that the requested column exists
-    if args.column not in t.colnames():
-        print(f'Error: MS column {args.column} does not exist in {msname}')
+    if column not in t.colnames():
+        print(f'Error: MS column {column} does not exist in {msname}')
         print(t.colnames())
         t.close()
         exit(1)
@@ -125,14 +141,16 @@ def main(msname, args):
     tspw = table(t.getkeyword('SPECTRAL_WINDOW'), readonly=True)
     chan_freq = np.squeeze(tspw.getcol('CHAN_FREQ'))
     # If we are using EEP mode, get the EEPs
-    if args.mode == 'eep':
-        feeps = [] # For storing the EEP ndarrays
-        for cf in chan_freq:
-            fmhz = round(cf/1.e6)
-            feeps.append(eep.load_eeps(fmhz,
-                                    args.eepdir,
-                                    filebase=args.eepbase,
-                                    suffix=args.eepsuff))
+    if mode == 'eep':
+        print('Getting EEPs ...')
+        chan_freq_round_mhz = np.round(chan_freq/1.e6)
+        chan_freq_to_get = np.unique(chan_freq_round_mhz)
+        feeps = {} # For storing the EEP ndarrays
+        for fmhz in chan_freq_to_get:
+            feeps[fmhz] = eep.load_eeps(fmhz,
+                                        eepdir,
+                                        filebase=eepbase,
+                                        suffix=eepsuff)
         print(f'Collected {len(feeps)} EEPs for {len(chan_freq)} channels')
 
     # Iterate over the unique (cross correlation baselines)
@@ -143,43 +161,48 @@ def main(msname, args):
         if ant1 == ant2:
             print(f'Skipping autocorrelation {ant1} ({antnames[ant1]})')
             continue
-        print(f'Processing baseline {ant1}&{ant2} ({antnames[ant1]}&{antnames[ant2]}), using {args.column}')
+        print(f'Processing baseline {ant1}&{ant2} ({antnames[ant1]}&{antnames[ant2]}), using {column}')
         # If we're just rotating the ground coordinates we can already
         # create the rotation matrix for each station
         # Take into account whether we are rotating or unrotating
-        if args.mode=='ground':
-            rot_ant1, rot_ant1_T = rotmat(angles[antnames[ant1]], args.invert)
-            rot_ant2, rot_ant2_T = rotmat(angles[antnames[ant2]], args.invert)
+        if mode=='ground':
+            rot_ant1, rot_ant1_T = rotmat(angles[antnames[ant1]], invert)
+            rot_ant2, rot_ant2_T = rotmat(angles[antnames[ant2]], invert)
 
         # Get the relevant data from the MS and make an array to store results
-        unrot_data = tsub.getcol(args.column)
+        unrot_data = tsub.getcol(column)
         rot_data = np.ones(unrot_data.shape, dtype=unrot_data.dtype)
 
         # Rotate the data for this baseline
         prev_fmhz = 0.
-        for i in tqdm(range(unrot_data.shape[0])): # time
-            if args.mode == 'analytic':
-                rot_ant1, rot_ant1_T = rot_analytic(times[i], obsloc, target,
-                                                    angles[antnames[ant1]],
-                                                    args.invert)
-                rot_ant2, rot_ant2_T = rot_analytic(times[i], obsloc, target,
-                                                    angles[antnames[ant2]],
-                                                    args.invert)
-            for j in range(unrot_data.shape[1]): # frequency
-                if args.mode == 'eep':
-                    fmhz = round(chan_freq[j]/1.e6)
-                    if fmhz != prev_fmhz: # skip making new EEP if same freq as last
-                        rot_ant1, rot_ant1_T = rot_eep(times[i], obsloc,
-                                                    ra, dec,
-                                                    angles[antnames[ant1]]*180./np.pi,
-                                                    feeps[j], args.invert,
-                                                    args.eepcorr)
-                        rot_ant2, rot_ant2_T = rot_eep(times[i], obsloc,
-                                                    ra, dec,
-                                                    angles[antnames[ant2]]*180./np.pi,
-                                                    feeps[j], args.invert,
-                                                    args.eepcorr)
-                    prev_fmhz = fmhz
+        for j in tqdm(range(unrot_data.shape[1])): # frequency
+            if mode == 'eep':
+                fmhz = round(chan_freq[j]/1.e6)
+                if fmhz != prev_fmhz: # skip making new EEP if same freq as last
+                    eepJ1, eepJ1T = rot_eep(times, obsloc,
+                                            ra, dec,
+                                            angles[antnames[ant1]]*180./np.pi,
+                                            feeps[fmhz], invert,
+                                            eepcorr)
+                    eepJ2, eepJ2T = rot_eep(times, obsloc,
+                                            ra, dec,
+                                            angles[antnames[ant2]]*180./np.pi,
+                                            feeps[fmhz], invert,
+                                            eepcorr)
+                prev_fmhz = fmhz*1.
+            for i in range(unrot_data.shape[0]): # time
+                if mode == 'analytic':
+                    rot_ant1, rot_ant1_T = rot_analytic(times[i], obsloc, target,
+                                                        angles[antnames[ant1]],
+                                                        invert)
+                    rot_ant2, rot_ant2_T = rot_analytic(times[i], obsloc, target,
+                                                        angles[antnames[ant2]],
+                                                        invert)
+                elif mode == 'eep':
+                    rot_ant1 = eepJ1[i]
+                    rot_ant1_T = eepJ1T[i]
+                    rot_ant2 = eepJ2[i]
+                    rot_ant2_T = eepJ2T[i]
                 # At this point the operation is the same no matter
                 # where the Jones matrices came from
                 rot_data[i,j,:] = np.matmul(rot_ant1,
@@ -192,17 +215,17 @@ def main(msname, args):
 
         # Place the rotated data back where it came from, or in DATA,
         # depending on what the user asked for
-        if not args.dryrun:
-            if args.write_to_column != '__NONE__':
-                print(f'Writing rotated data to {args.write_to_column} column')
-                tsub.putcol(args.write_to_column, rot_data)
+        if not dryrun:
+            if write_to_column != '__NONE__':
+                print(f'Writing rotated data to {write_to_column} column')
+                tsub.putcol(write_to_column, rot_data)
             else:
-                print('Writing rotated data to',args.column,'column')
-                tsub.putcol(args.column, rot_data)
+                print('Writing rotated data to',column,'column')
+                tsub.putcol(column, rot_data)
 
         # If requested, make a plot that shows the before and after data
         # TO DO : Take into account the FLAG column
-        if args.plots:
+        if plots:
             out_file = f'visdata_{antnames[ant1]}_{antnames[ant2]}.png'
             print('Plotting to', out_file)
             # Make the plot, 2x2 with amp/phase for the baseline, before and after
@@ -230,7 +253,7 @@ def main(msname, args):
                 ax[0][1].yaxis.tick_right()
                 ax[1][1].yaxis.set_label_position("right")
                 ax[1][1].yaxis.tick_right()
-                fig.suptitle(f'{msname} - {args.column}')
+                fig.suptitle(f'{msname} - {column}')
                 plt.tight_layout()
                 plt.savefig(out_file, dpi=200, bbox_inches='tight')
 
@@ -277,9 +300,9 @@ if __name__ == '__main__':
     if len(ms_name_list)==0:
         print(f'Error: no MS by that name ({args.msname}) here')
     elif len(ms_name_list)==1:
-        main(args.msname, args)
+        rotate_ms(args.msname, **args)
     else:
         print(f'Running sequentially for {len(ms_name_list)} MSs')
         for this_ms in ms_name_list:
-            main(this_ms, args)
+            rotate_ms(this_ms, **args)
 
