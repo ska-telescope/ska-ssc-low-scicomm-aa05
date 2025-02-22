@@ -72,12 +72,16 @@ Rotation function used if mode = 'eep'
 def rot_eep(time, loc, ra, dec, ang, feep, do_inv, do_pacorr):
     # We will get a Jones matrix for each time step
     J = eep.station_beam_matrix(feep,
-                                -ang, # -ve seems necessary from testing
+                                ang, # -ve seems necessary from testing
                                 loc,
                                 time,
                                 ra,
                                 dec,
                                 pa_correction=do_pacorr)
+    # Swap sign of X-axis (test)
+    for i in range(J.shape[0]):
+        J[i][0][1] = -J[i][0][1]
+        J[i][1][0] = -J[i][1][0]
     # Prepare the arrays to return
     Jarr = np.zeros_like(J)
     JarrT = np.zeros_like(J)
@@ -299,10 +303,12 @@ if __name__ == '__main__':
     ms_name_list = glob(args.msname)
     if len(ms_name_list)==0:
         print(f'Error: no MS by that name ({args.msname}) here')
-    elif len(ms_name_list)==1:
-        rotate_ms(args.msname, **args)
+    del args.msname
+    vargs = vars(args)
+    if len(ms_name_list)==1:
+        rotate_ms(ms_name_list[0], **vargs)
     else:
         print(f'Running sequentially for {len(ms_name_list)} MSs')
         for this_ms in ms_name_list:
-            rotate_ms(this_ms, **args)
+            rotate_ms(this_ms, **vargs)
 
