@@ -68,12 +68,14 @@ Rotation function used if mode = 'eep'
 """
 def rot_eep(time, loc, ra, dec, ang, feep, do_inv, do_pacorr):
     J = eep.station_beam_matrix(feep,
-                                -ang, # -ve seems necessary from testing
+                                ang, # -ve seems necessary from testing
                                 loc,
                                 time,
                                 ra,
                                 dec,
                                 pa_correction=do_pacorr)
+    J[0][1] = -J[0][1]
+    J[1][0] = -J[1][0]
     if do_inv: # inv is the other way around for this Jones matrix...
         return J, J.conj().T
     else:
